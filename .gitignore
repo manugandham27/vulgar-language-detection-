@@ -1,0 +1,22 @@
+# Environments
+venv/
+.env
+
+# MacOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Data and Models
+# Models can be > 100MB which breaks GitHub push without LFS
+outputs/models/*.h5
+outputs/models/*.joblib
+data/dataset.csv
+
+# Uploads
+webapp/static/uploads/*
+sample_test_video.mp4
+clean_part.aiff
+toxic_part.aiff

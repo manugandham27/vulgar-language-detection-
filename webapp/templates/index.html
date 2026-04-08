@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vulgar Language Detection — Video Analyzer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Load Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation -->
+        <nav style="margin-bottom: 2rem; display: flex; justify-content: flex-end;">
+            <a href="/analytics" style="color: var(--accent); text-decoration: none; font-weight: 600;">📊 View Analytics Dashboard</a>
+        </nav>
+
+        <header>
+            <h1>Video Vulgarity Detector</h1>
+            <p>Upload a video. We'll transcribe the speech and identify profanity, hate speech, spam, or abuse using our Deep Learning Bi-LSTM network.</p>
+        </header>
+        
+        <main>
+            <!-- Upload Section -->
+            <section class="upload-section" id="upload-section">
+                <form id="upload-form">
+                    <div class="drop-zone" id="drop-zone">
+                        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p>Drag and drop a video file, or <span>browse</span></p>
+                        <input type="file" id="video-input" name="video" accept="video/mp4,video/x-m4v,video/*,audio/*" hidden>
+                    </div>
+                </form>
+                
+                <!-- Progress Bar Section -->
+                <div id="progress-container" class="hidden">
+                    <div class="progress-bar-wrapper">
+                        <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+                    </div>
+                    <p id="progress-text" style="text-align: center; margin-top: 10px; color: var(--text-secondary);">Uploading...</p>
+                </div>
+
+                <div id="error-message" class="error-toast hidden"></div>
+            </section>
+
+            <!-- Results Section -->
+            <section id="results-section" class="hidden glass-panel">
+                <div class="results-header">
+                    <h2>Analysis Results</h2>
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <span id="confidence-badge" style="color: var(--text-secondary); font-size: 0.9rem;"></span>
+                        <div class="overall-badge" id="overall-badge">Clean</div>
+                    </div>
+                </div>
+                
+                <div class="results-grid">
+                    <div class="video-preview">
+                        <video id="video-player" controls>
+                            <source src="" type="video/mp4">
+                            Your browser does not support the video tag.
+                        </video>
+                    </div>
+                    
+                    <div class="transcription-panel">
+                        <h3>Detailed Speech Analysis</h3>
+                        <div id="segments-container" class="segments-list">
+                            <!-- Segments will be populated via JS -->
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="reset-btn" class="btn-primary">Analyze Another Video</button>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('video-input');
+        const uploadSection = document.getElementById('upload-section');
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        
+        const resultsSection = document.getElementById('results-section');
+        const videoPlayer = document.getElementById('video-player');
+        const segmentsContainer = document.getElementById('segments-container');
+        const overallBadge = document.getElementById('overall-badge');
+        const confidenceBadge = document.getElementById('confidence-badge');
+        const errorToast = document.getElementById('error-message');
+        const resetBtn = document.getElementById('reset-btn');
+
+        let pollingInterval = null;
+
+        // Drag & Drop Handlers
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleUpload(fileInput.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) handleUpload(fileInput.files[0]);
+        });
+
+        resetBtn.addEventListener('click', () => {
+            resultsSection.classList.add('hidden');
+            uploadSection.classList.remove('hidden');
+            dropZone.classList.remove('hidden');
+            fileInput.value = '';
+            videoPlayer.src = '';
+            progressFill.style.width = '0%';
+        });
+
+        async function handleUpload(file) {
+            const formData = new FormData();
+            formData.append('video', file);
+
+            dropZone.classList.add('hidden');
+            progressContainer.classList.remove('hidden');
+            errorToast.classList.add('hidden');
+            progressText.textContent = "Uploading...";
+            progressFill.style.width = "5%";
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (!response.ok) throw new Error(data.error || 'Server error occurred.');
+
+                // Start polling the task
+                pollTaskStatus(data.task_id);
+
+            } catch (err) {
+                showError(err.message);
+                dropZone.classList.remove('hidden');
+                progressContainer.classList.add('hidden');
+            }
+        }
+
+        async function pollTaskStatus(taskId) {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/status/${taskId}`);
+                    const data = await response.json();
+
+                    if (data.error) throw new Error(data.error);
+
+                    // Update UI
+                    progressFill.style.width = `${data.progress}%`;
+                    progressText.textContent = data.status;
+
+                    if (data.status === 'Complete') {
+                        clearInterval(pollingInterval);
+                        setTimeout(() => displayResults(data.result), 500); // Small delay for visual completion
+                    } else if (data.status === 'Error') {
+                        clearInterval(pollingInterval);
+                        throw new Error(data.error);
+                    }
+                } catch (err) {
+                    clearInterval(pollingInterval);
+                    showError(err.message);
+                    dropZone.classList.remove('hidden');
+                    progressContainer.classList.add('hidden');
+                }
+            }, 1500);
+        }
+
+        function displayResults(data) {
+            uploadSection.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+            resultsSection.classList.remove('hidden');
+            
+            // Setup Video
+            videoPlayer.src = data.video_url;
+            videoPlayer.load();
+            
+            // Overall Badge
+            overallBadge.textContent = data.overall_classification.toUpperCase();
+            overallBadge.className = 'overall-badge ' + getStatusClass(data.overall_classification);
+            confidenceBadge.textContent = `Confidence: ${data.overall_confidence}%`;
+            
+            // Build Segments
+            segmentsContainer.innerHTML = '';
+            data.segments.forEach(seg => {
+                const div = document.createElement('div');
+                div.className = 'segment-item ' + (seg.is_vulgar ? 'vulgar' : 'clean');
+                div.onclick = () => {
+                    videoPlayer.currentTime = seg.start;
+                    videoPlayer.play();
+                };
+                
+                div.innerHTML = `
+                    <div class="segment-time">${formatTime(seg.start)} - ${formatTime(seg.end)}</div>
+                    <div class="segment-content">
+                        <p class="seg-text">${seg.text}</p>
+                        <div style="text-align: right;">
+                            <span class="seg-badge ${getStatusClass(seg.classification)}">${seg.classification}</span>
+                            <div style="font-size: 0.7rem; margin-top: 4px; color: var(--text-secondary);">${seg.confidence}% Conf</div>
+                        </div>
+                    </div>
+                `;
+                segmentsContainer.appendChild(div);
+            });
+        }
+
+        function showError(msg) {
+            errorToast.textContent = msg;
+            errorToast.classList.remove('hidden');
+            setTimeout(() => errorToast.classList.add('hidden'), 5000);
+        }
+
+        function getStatusClass(classification) {
+            switch(classification.toLowerCase()) {
+                case 'clean': return 'status-clean';
+                case 'profanity': return 'status-profane';
+                case 'hate_speech': return 'status-hate';
+                case 'abuse': return 'status-abuse';
+                case 'spam_toxic': return 'status-toxic';
+                default: return 'status-clean';
+            }
+        }
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+            const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+    </script>
+</body>
+</html>
